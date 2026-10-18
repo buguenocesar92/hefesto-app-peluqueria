@@ -1,0 +1,136 @@
+# =============================================================================
+# Hefesto Studio — Peluquería: desarrollo
+# =============================================================================
+# Postgres, Redis, API, interfaz y Caddy, con puertos atados a 127.0.0.1.
+#
+# POR QUÉ LOS PUERTOS ESTÁN ATADOS A 127.0.0.1
+# --------------------------------------------
+# En desarrollo uno abre `http://localhost:3000` en el navegador y ya. Atar el
+# puerto a la interfaz de loopback hace que además no quede expuesto a la red
+# local: una máquina de desarrollo en una cafetería con la misma red no es un
+# lugar para una base con fichas de clientas de ejemplo.
+#
+# QUÉ SE USA Y QUÉ NO
+# -------------------
+# `docker-compose.dev.yml` usa la MISMA imagen que producción. La única
+# diferencia es que `php.ini` se sobrescribe para no cachear el código entre
+# recargas, y que los puertos se publican en localhost. No hay un build de
+# desarrollo separado, porque en las demás aplicaciones de Hefesto fue
+# justamente el origen de diferencias que aparecían solo en producción.
+# =============================================================================
+
+name: peluqueria-dev
+
+services:
+  postgres:
+    image: "docker.io/library/postgres:18.6"
+    env_file:
+      - ../api/.env
+    environment:
+      POSTGRES_DB: ${DB_DATABASE:-peluqueria}
+      # Rol de ARRANQUE: la imagen oficial lo crea superusuario, asi que la
+      # aplicacion nunca entra con el. Ver la nota de la cabecera de produccion.
+      POSTGRES_USER: ${DB_ADMIN_USERNAME:-peluqueria_admin}
+      POSTGRES_PASSWORD: ${DB_ADMIN_PASSWORD:?falta DB_ADMIN_PASSWORD en .env}
+      # Rol con el que conecta la aplicacion. Lo crea el script de arranque, con
+      # NOSUPERUSER y NOBYPASSRLS explicitos.
+      APP_DB_ROLE: ${DB_USERNAME:-peluqueria}
+      APP_DB_PASSWORD: ${DB_PASSWORD:?falta DB_PASSWORD en .env}
+      # Por omision es el mismo rol de la aplicacion y el script no hace nada.
+      APP_DB_AUDIT_ROLE: ${DB_AUDITORIA_USERNAME:-${DB_USERNAME:-peluqueria}}
+      APP_DB_AUDIT_PASSWORD: ${DB_AUDITORIA_PASSWORD:-${DB_PASSWORD}}
+    ports:
+      # Solo loopback. Ver la nota de arriba.
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - postgres_dev:/var/lib/postgresql/data
+      # Este archivo tiene que existir de verdad: si no, Docker monta uno vacio, el
+      # rol no se crea nunca y la API no se puede conectar.
+      - ./postgres/inicializar-rol.sh:/docker-entrypoint-initdb.d/inicializar-rol.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME:-peluqueria} -d ${DB_DATABASE:-peluqueria}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  redis:
+    image: "docker.io/library/redis:8.8.3-alpine"
+    command:
+      - redis-server
+      - --loglevel
+      - notice
+    ports:
+      - "127.0.0.1:6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: ..
+      dockerfile: deploy/api/Dockerfile
+    env_file:
+      - ../api/.env
+    environment:
+      APP_ENV: local
+      APP_DEBUG: "true"
+      # En desarrollo se quiere ver el código recién escrito. Con
+      # `validate_timestamps = 0` el contenedor quedaría sirviendo la versión
+      # anterior hasta que se reinicie, que es la forma clásica de perder media
+      # hora.
+      PHP_OPCACHE_VALIDATE_TIMESTAMPS: "1"
+      PHP_OPCACHE_REVALIDATE_FREQ: "0"
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ../api:/var/www/html
+      - storage_dev:/var/www/html/storage
+      - bootstrap_dev:/var/www/html/bootstrap/cache
+
+  web:
+    build:
+      context: ..
+      dockerfile: deploy/web/Dockerfile
+    environment:
+      NUXT_API_BASE: http://api:8000
+      NITRO_HOST: 0.0.0.0
+      NITRO_PORT: 3000
+      NODE_ENV: development
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      - api
+    volumes:
+      - ../web:/app
+      - web_nuxt:/app/.nuxt
+
+  caddy:
+    image: "docker.io/library/caddy:2.11.7-alpine"
+    environment:
+      DOMINIO: ${DOMINIO:-localhost}
+      ACME_EMAIL: ${ACME_EMAIL:-admin@hefesto.cl}
+    ports:
+      - "127.0.0.1:8080:80"
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+    depends_on:
+      - api
+      - web
+
+volumes:
+  postgres_dev:
+    name: peluqueria_dev_postgres
+  storage_dev:
+    name: peluqueria_dev_storage
+  bootstrap_dev:
+    name: peluqueria_dev_bootstrap
+  web_nuxt:
+    name: peluqueria_dev_nuxt

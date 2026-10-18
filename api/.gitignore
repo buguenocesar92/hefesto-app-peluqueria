@@ -1,0 +1,53 @@
+# =============================================================================
+# Peluquería: API
+# =============================================================================
+# Este `.gitignore` cubre la API. El de la raíz de la aplicación cubre las tres
+# carpetas; este es el que más se parece a los de las demás aplicaciones de
+# Hefesto, para que quien llegue por `api/` encuentre lo que espera.
+#
+# LO MÁS IMPORTANTE AQUÍ
+# ---------------------
+# `.env` NUNCA se versiona con valores reales: tiene la contraseña de la base y
+# el secreto del cliente de Authentik.
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Dependencias
+# -----------------------------------------------------------------------------
+/vendor
+
+# -----------------------------------------------------------------------------
+# Configuración con secretos
+# -----------------------------------------------------------------------------
+.env
+.env.backup
+.env.production
+*.key
+
+# -----------------------------------------------------------------------------
+# Laravel
+# -----------------------------------------------------------------------------
+storage/*.key
+storage/framework/cache/*
+storage/framework/sessions/*
+storage/framework/views/*
+storage/logs/*
+bootstrap/cache/*.php
+database/*.sqlite
+database/*.sqlite-journal
+
+# -----------------------------------------------------------------------------
+# Pruebas
+# -----------------------------------------------------------------------------
+.phpunit.cache
+.phpunit.result.cache
+/coverage
+
+# -----------------------------------------------------------------------------
+# Sistema y editores
+# -----------------------------------------------------------------------------
+.DS_Store
+Thumbs.db
+*.swp
+.idea
+.vscode

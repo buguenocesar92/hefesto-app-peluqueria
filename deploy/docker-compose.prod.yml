@@ -1,0 +1,149 @@
+# =============================================================================
+# Hefesto Studio — Peluquería: producción
+# =============================================================================
+# Postgres, Redis, API, interfaz y Caddy. Solo Caddy publica puertos.
+#
+# ANTES DE LEVANTAR ESTO
+#   1. Copie `api/.env.example` a `api/.env` y complete los valores.
+#   2. Copie `.env.example` a `.env` y complete los valores.
+#   3. Genere APP_KEY:
+#      `docker compose -f deploy/docker-compose.prod.yml run --rm api php artisan key:generate`
+#   4. Cree el salón y su primer administrador (ver docs/04).
+#   5. Corra `php artisan peluqueria:verificar-aislamiento` (ver docs/03).
+#   6. Defina el aviso de espera entre procesos químicos en `api/.env`
+#      (`PELUQUERIA_DIAS_ENTRE_PROCESOS`). Viene vacío y hay que dejarlo vacío
+#      hasta que alguien verifique la regla. Ver docs/02 y docs/06.
+#
+# A partir de ahí: esto NO está listo para atender clientas reales. Ver docs/07.
+# =============================================================================
+
+name: peluqueria
+
+services:
+  postgres:
+    image: "docker.io/library/postgres:18.6"
+    restart: unless-stopped
+    env_file:
+      - ../api/.env
+    environment:
+      POSTGRES_DB: ${DB_DATABASE:-peluqueria}
+      # Rol de ARRANQUE: la imagen oficial ejecuta
+      # `initdb --username="$POSTGRES_USER"` y ese rol NACE superusuario. Solo se
+      # usa para `initdb` y para lo administrativo. La aplicacion NUNCA entra
+      # con el, porque con superusuario PostgreSQL ignora las politicas de Row
+      # Level Security y el `FORCE ROW LEVEL SECURITY` no lo sujeta a el.
+      POSTGRES_USER: ${DB_ADMIN_USERNAME:-peluqueria_admin}
+      POSTGRES_PASSWORD: ${DB_ADMIN_PASSWORD:?falta DB_ADMIN_PASSWORD en .env}
+      # Rol con el que conecta la aplicacion. Lo crea
+      # `deploy/postgres/inicializar-rol.sh`, con NOSUPERUSER y NOBYPASSRLS
+      # explicitos, y le da la propiedad de la base para que las migraciones de
+      # Laravel puedan crear el esquema. Ver docs/03.
+      APP_DB_ROLE: ${DB_USERNAME:-peluqueria}
+      APP_DB_PASSWORD: ${DB_PASSWORD:?falta DB_PASSWORD en .env}
+      # Rol de la bitacora de accesos a los antecedentes de salud. Por omision es
+      # el MISMO rol de la aplicacion y el script no hace nada. Si se separa con
+      # `DB_AUDITORIA_USERNAME`, hay que definir TAMBIEN `DB_AUDITORIA_PASSWORD`.
+      APP_DB_AUDIT_ROLE: ${DB_AUDITORIA_USERNAME:-${DB_USERNAME:-peluqueria}}
+      APP_DB_AUDIT_PASSWORD: ${DB_AUDITORIA_PASSWORD:-${DB_PASSWORD}}
+    volumes:
+      - postgres:/var/lib/postgresql/data
+      # Este archivo tiene que existir de verdad: si no, Docker monta uno vacio, el
+      # rol no se crea nunca y la API no se puede conectar.
+      - ./postgres/inicializar-rol.sh:/docker-entrypoint-initdb.d/inicializar-rol.sh:ro
+    healthcheck:
+      # `pg_isready` con el rol de la APLICACION: comprueba que la base acepta el
+      # rol que de verdad usa la API, no solo que el proceso vive.
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME:-peluqueria} -d ${DB_DATABASE:-peluqueria}"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    # NO se publica ningún puerto: PostgreSQL no se alcanza desde afuera.
+
+  redis:
+    image: "docker.io/library/redis:8.8.3-alpine"
+    restart: unless-stopped
+    command:
+      - redis-server
+      - --save
+      - "60"
+      - "1"
+      - --appendonly
+      - "no"
+      - --loglevel
+      - notice
+    volumes:
+      - redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+    # Sin puertos publicados: solo la API llega a Redis.
+
+  api:
+    build:
+      context: ..
+      dockerfile: deploy/api/Dockerfile
+    restart: unless-stopped
+    env_file:
+      - ../api/.env
+    environment:
+      APP_ENV: production
+      APP_DEBUG: "false"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - storage:/var/www/html/storage
+      - bootstrap:/var/www/html/bootstrap/cache
+    # Sin puertos publicados: solo Caddy llega a la API.
+
+  web:
+    build:
+      context: ..
+      dockerfile: deploy/web/Dockerfile
+    restart: unless-stopped
+    environment:
+      NUXT_API_BASE: http://api:8000
+      NITRO_HOST: 0.0.0.0
+      NITRO_PORT: 3000
+    depends_on:
+      - api
+    # Sin puertos publicados: solo Caddy llega a la interfaz.
+
+  caddy:
+    image: "docker.io/library/caddy:2.11.7-alpine"
+    restart: unless-stopped
+    env_file:
+      - ../api/.env
+    environment:
+      DOMINIO: ${DOMINIO:?falta DOMINIO en .env}
+      ACME_EMAIL: ${ACME_EMAIL:?falta ACME_EMAIL en .env}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_datos:/data
+      - caddy_config:/config
+    depends_on:
+      - api
+      - web
+
+volumes:
+  postgres:
+    name: peluqueria_postgres
+  redis:
+    name: peluqueria_redis
+  storage:
+    name: peluqueria_storage
+  bootstrap:
+    name: peluqueria_bootstrap
+  caddy_datos:
+    name: peluqueria_caddy_datos
+  caddy_config:
+    name: peluqueria_caddy_config

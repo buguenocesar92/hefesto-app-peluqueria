@@ -1,0 +1,34 @@
+# =============================================================================
+# Peluquería
+# =============================================================================
+# Este archivo solo define lo que NO se versiona. Las reglas de la API están en
+# `api/.gitignore` y las de la interfaz en `web/.gitignore`: cada carpeta tiene
+# las suyas porque su contenido es distinto.
+# =============================================================================
+
+# Archivos de entorno con valores reales. Se versiona solo el `.env.example`.
+.env
+.env.*
+!.env.example
+api/.env
+web/.env
+
+# Datos del despliegue
+deploy/respaldos/*.dump
+deploy/respaldos/*.dump.parcial
+deploy/respaldos/*.manifiesto.txt
+deploy/respaldos/*.completo
+
+# Dependencias
+node_modules/
+vendor/
+
+# Resultados de compilación
+web/.nuxt
+web/.output
+web/.data
+
+# Sistema
+.DS_Store
+Thumbs.db
+*.log
